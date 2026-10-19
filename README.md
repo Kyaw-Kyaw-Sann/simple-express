@@ -1,23 +1,61 @@
 # Simple Express
 
-A beginner-friendly REST API learning project built step by step with TypeScript, Node.js, Express.js, and MySQL.
+A beginner-friendly CRUD REST API built with TypeScript, Node.js, Express.js, and MySQL.
 
-## Current phase
+## Features
 
-Phase 5 - Basic Project Organization
+- MySQL-backed user CRUD operations
+- TypeScript types and strict checking
+- Route, query, and request-body validation
+- Pagination, role filtering, name search, and safe sorting
+- Consistent JSON success and error responses
+- Centralized `404` and `500` error handling
+- Database health endpoint
+- Reusable API smoke test
 
-The CRUD API is separated into small files for the Express app, server, routes, controllers, data, types, and configuration.
+## Requirements
 
-## Run
+- Node.js 20.6 or newer
+- npm
+- MySQL 8.0 or newer
+
+## Setup
+
+Install dependencies:
 
 ```bash
 npm install
+```
+
+Copy `.env.example` to `.env` and enter your MySQL settings:
+
+```env
+PORT=3000
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=your_mysql_password
+DB_NAME=simple_express_db
+```
+
+Create the database, table, and sample records:
+
+```bash
+mysql -u root -p -e "source database/schema.sql"
+mysql -u root -p -e "source database/seed.sql"
+```
+
+Do not commit `.env` because it contains local credentials.
+
+## Run
+
+Development mode:
+
+```bash
 npm run dev
 ```
 
-The server runs at `http://localhost:3000` by default.
-
-## Check and build
+Production build:
 
 ```bash
 npm run typecheck
@@ -25,20 +63,23 @@ npm run build
 npm start
 ```
 
-Compiled JavaScript is written to the `dist` folder.
+The server runs at `http://localhost:3000` by default.
 
 ## Endpoints
 
-- `GET /` - current project phase
-- `GET /about` - project information
-- `POST /api/users` - create a user
-- `GET /api/users` - read all users
-- `GET /api/users?role=member` - filter users by role
-- `GET /api/users/:id` - read one user
-- `PATCH /api/users/:id` - update a user's name or role
-- `DELETE /api/users/:id` - delete a user
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `GET` | `/` | Project information |
+| `GET` | `/about` | Project purpose |
+| `GET` | `/health` | API and database health |
+| `GET` | `/api/users` | Paginated user list |
+| `GET` | `/api/users/:id` | Read one user |
+| `POST` | `/api/users` | Create a user |
+| `PUT` | `/api/users/:id` | Replace a user's name and role |
+| `PATCH` | `/api/users/:id` | Update a user's name or role |
+| `DELETE` | `/api/users/:id` | Delete a user |
 
-Create request example:
+Create or replace request body:
 
 ```json
 {
@@ -47,22 +88,70 @@ Create request example:
 }
 ```
 
-Unknown routes return a JSON `404` response.
+## List query parameters
+
+```http
+GET /api/users?page=1&limit=10&role=member&search=Mya&sort=name&order=asc
+```
+
+- `page` - positive integer; default `1`
+- `limit` - integer from `1` to `100`; default `10`
+- `role` - `admin` or `member`
+- `search` - partial name search
+- `sort` - `id`, `name`, or `role`
+- `order` - `asc` or `desc`
+
+List response:
+
+```json
+{
+  "data": [],
+  "pagination": {
+    "page": 1,
+    "limit": 10,
+    "total": 0,
+    "totalPages": 0
+  }
+}
+```
+
+Single-resource success responses use `{ "data": ... }`. Error responses use `{ "message": "..." }`. A successful delete returns `204 No Content`.
+
+## Smoke test
+
+Start the server, then run this command in another terminal:
+
+```bash
+npm run test:smoke
+```
+
+The script checks health, listing, CRUD operations, validation, malformed JSON, and not-found behavior. Its temporary user is deleted after the test.
 
 ## Project structure
 
 ```text
-src/
-|-- app.ts
-|-- server.ts
-|-- config/
-|   `-- env.ts
-|-- controllers/
-|   `-- userController.ts
-|-- data/
-|   `-- users.ts
-|-- routes/
-|   `-- userRoutes.ts
-`-- types/
-    `-- user.ts
+.
+|-- database/
+|   |-- schema.sql
+|   |-- seed.sql
+|   `-- crud-examples.sql
+|-- scripts/
+|   `-- smoke-test.mjs
+`-- src/
+    |-- app.ts
+    |-- server.ts
+    |-- config/
+    |   `-- env.ts
+    |-- controllers/
+    |   |-- healthController.ts
+    |   `-- userController.ts
+    |-- database/
+    |   `-- connection.ts
+    |-- middleware/
+    |   |-- errorHandlers.ts
+    |   `-- validateUser.ts
+    |-- routes/
+    |   `-- userRoutes.ts
+    `-- types/
+        `-- user.ts
 ```
