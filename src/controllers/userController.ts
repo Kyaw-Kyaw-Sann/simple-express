@@ -1,118 +1,201 @@
 import type { Request, Response } from "express";
+import type { ResultSetHeader, RowDataPacket } from "mysql2";
 
-import { users } from "../data/users.js";
-import type { User, UserRequestBody } from "../types/user.js";
+import { pool } from "../database/connection.js";
+import type {
+  CreateUserBody,
+  UpdateUserBody,
+  User,
+  UserListQuery
+} from "../types/user.js";
 
 type UserIdParams = {
   id: string;
 };
 
-type UserQuery = {
-  role?: string;
+type UserRow = User & RowDataPacket;
+type UserCountRow = RowDataPacket & {
+  total: number;
 };
 
-function getUsers(
-  request: Request<Record<string, never>, unknown, unknown, UserQuery>,
-  response: Response
-) {
-  const { role } = request.query;
-  const matchingUsers = role
-    ? users.filter((user) => user.role === role)
-    : users;
+async function findUserById(userId: number) {
+  const [rows] = await pool.execute<UserRow[]>(
+    "SELECT id, name, role FROM users WHERE id = ?",
+    [userId]
+  );
 
-  response.status(200).json(matchingUsers);
+  return rows[0];
 }
 
-function getUserById(request: Request<UserIdParams>, response: Response) {
+async function getUsers(
+  request: Request<Record<string, never>, unknown, unknown, UserListQuery>,
+  response: Response
+) {
+  const {
+    page = "1",
+    limit = "10",
+    role,
+    search,
+    sort = "id",
+    order = "asc"
+  } = request.query;
+
+  const pageNumber = Number(page);
+  const limitNumber = Number(limit);
+  const offset = (pageNumber - 1) * limitNumber;
+  const conditions: string[] = [];
+  const values: Array<string | number> = [];
+
+  if (role) {
+    conditions.push("role = ?");
+    values.push(role);
+  }
+
+  if (search?.trim()) {
+    conditions.push("name LIKE ?");
+    values.push(`%${search.trim()}%`);
+  }
+
+  const whereClause = conditions.length > 0
+    ? `WHERE ${conditions.join(" AND ")}`
+    : "";
+
+  const [countRows] = await pool.execute<UserCountRow[]>(
+    `SELECT COUNT(*) AS total FROM users ${whereClause}`,
+    values
+  );
+
+  const [users] = await pool.execute<UserRow[]>(
+    `SELECT id, name, role
+     FROM users
+     ${whereClause}
+     ORDER BY ${sort} ${order.toUpperCase()}
+     LIMIT ? OFFSET ?`,
+    [...values, limitNumber, offset]
+  );
+
+  const total = countRows[0]?.total ?? 0;
+
+  response.status(200).json({
+    data: users,
+    pagination: {
+      page: pageNumber,
+      limit: limitNumber,
+      total,
+      totalPages: Math.ceil(total / limitNumber)
+    }
+  });
+}
+
+async function getUserById(request: Request<UserIdParams>, response: Response) {
   const userId = Number(request.params.id);
-  const user = users.find((currentUser) => currentUser.id === userId);
+
+  const user = await findUserById(userId);
 
   if (!user) {
     response.status(404).json({ message: "User not found" });
     return;
   }
 
-  response.status(200).json(user);
+  response.status(200).json({ data: user });
 }
 
-function createUser(
-  request: Request<Record<string, never>, unknown, UserRequestBody>,
+async function createUser(
+  request: Request<Record<string, never>, unknown, CreateUserBody>,
   response: Response
 ) {
-  const { name, role } = request.body ?? {};
+  const { name, role } = request.body;
 
-  if (
-    typeof name !== "string" ||
-    name.trim() === "" ||
-    (role !== "admin" && role !== "member")
-  ) {
-    response.status(400).json({
-      message: "Name is required and role must be admin or member"
-    });
-    return;
-  }
+  const [result] = await pool.execute<ResultSetHeader>(
+    "INSERT INTO users (name, role) VALUES (?, ?)",
+    [name, role]
+  );
 
   const newUser: User = {
-    id: Math.max(...users.map((user) => user.id), 0) + 1,
-    name: name.trim(),
+    id: result.insertId,
+    name,
     role
   };
 
-  users.push(newUser);
-  response.status(201).json(newUser);
+  response.status(201).json({ data: newUser });
 }
 
-function updateUser(
-  request: Request<UserIdParams, unknown, UserRequestBody>,
+async function updateUser(
+  request: Request<UserIdParams, unknown, UpdateUserBody>,
   response: Response
 ) {
   const userId = Number(request.params.id);
-  const user = users.find((currentUser) => currentUser.id === userId);
+
+  const user = await findUserById(userId);
 
   if (!user) {
     response.status(404).json({ message: "User not found" });
     return;
   }
 
-  const { name, role } = request.body ?? {};
+  const { name, role } = request.body;
+  const updatedName = name ?? user.name;
+  const updatedRole = role ?? user.role;
 
-  if (name === undefined && role === undefined) {
-    response.status(400).json({ message: "Provide a name or role to update" });
-    return;
-  }
+  await pool.execute(
+    "UPDATE users SET name = ?, role = ? WHERE id = ?",
+    [updatedName, updatedRole, userId]
+  );
 
-  if (name !== undefined && (typeof name !== "string" || name.trim() === "")) {
-    response.status(400).json({ message: "Name cannot be empty" });
-    return;
-  }
-
-  if (role !== undefined && role !== "admin" && role !== "member") {
-    response.status(400).json({ message: "Role must be admin or member" });
-    return;
-  }
-
-  if (typeof name === "string") {
-    user.name = name.trim();
-  }
-
-  if (role === "admin" || role === "member") {
-    user.role = role;
-  }
-
-  response.status(200).json(user);
+  response.status(200).json({
+    data: {
+      id: userId,
+      name: updatedName,
+      role: updatedRole
+    }
+  });
 }
 
-function deleteUser(request: Request<UserIdParams>, response: Response) {
+async function replaceUser(
+  request: Request<UserIdParams, unknown, CreateUserBody>,
+  response: Response
+) {
   const userId = Number(request.params.id);
-  const userIndex = users.findIndex((user) => user.id === userId);
+  const user = await findUserById(userId);
 
-  if (userIndex === -1) {
+  if (!user) {
     response.status(404).json({ message: "User not found" });
     return;
   }
 
-  users.splice(userIndex, 1);
+  const { name, role } = request.body;
+
+  await pool.execute(
+    "UPDATE users SET name = ?, role = ? WHERE id = ?",
+    [name, role, userId]
+  );
+
+  response.status(200).json({
+    data: { id: userId, name, role }
+  });
+}
+
+async function deleteUser(request: Request<UserIdParams>, response: Response) {
+  const userId = Number(request.params.id);
+
+  const [result] = await pool.execute<ResultSetHeader>(
+    "DELETE FROM users WHERE id = ?",
+    [userId]
+  );
+
+  if (result.affectedRows === 0) {
+    response.status(404).json({ message: "User not found" });
+    return;
+  }
+
   response.status(204).send();
 }
 
-export { createUser, deleteUser, getUserById, getUsers, updateUser };
+export {
+  createUser,
+  deleteUser,
+  getUserById,
+  getUsers,
+  replaceUser,
+  updateUser
+};
